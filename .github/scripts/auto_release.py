@@ -15,15 +15,15 @@ def timestamp(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def api(endpoint, payload=None):
+def api(endpoint, payload=None, method="PUT"):
     command = ["gh", "api", endpoint]
     if payload is not None:
-        command += ["--method", "PUT", "--input", "-"]
+        command += ["--method", method, "--input", "-"]
     result = subprocess.run(
         command, input=json.dumps(payload) if payload is not None else None,
         text=True, capture_output=True, check=True, timeout=30,
     )
-    return json.loads(result.stdout)
+    return json.loads(result.stdout) if result.stdout.strip() else None
 
 
 def pages(endpoint, key=None):
@@ -45,6 +45,20 @@ def release_pr(pr, repository, branch):
         and (pr["head"].get("repo") or {}).get("full_name") == repository
         and pr["base"]["ref"] == branch
     )
+
+
+def same_tree(root, pr):
+    """PR file lists use a merge base, so compare the actual endpoint trees."""
+    base = api(f"{root}/git/commits/{pr['base']['sha']}")["tree"]["sha"]
+    head = api(f"{root}/git/commits/{pr['head']['sha']}")["tree"]["sha"]
+    return base == head
+
+
+def output(name, value):
+    """Only report a completed merge to the publishing workflow."""
+    if path := os.environ.get("GITHUB_OUTPUT"):
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"{name}={value}\n")
 
 
 def cooldown_reason(releases, closed_prs, now, pr_date):
@@ -73,6 +87,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--merge", action="store_true", help="Perform the eligible merge")
     args = parser.parse_args()
+    output("merged", "false")
     repository = os.environ.get("GITHUB_REPOSITORY", "codyps/fastrace-diesel")
     if repository != "codyps/fastrace-diesel":
         raise RuntimeError("Automatic releases are only configured for codyps/fastrace-diesel")
@@ -95,6 +110,9 @@ def main():
     # Require the repository automation identity as well as its branch prefix.
     if pr["draft"] or pr["user"]["login"] != "github-actions[bot]":
         print("Release PR is a draft or was not created by the release token account")
+        return
+    if same_tree(root, pr):
+        print("Release PR has the same file tree as its base; stale PR needs cleanup")
         return
     files = pages(f"{root}/pulls/{pr['number']}/files")
     if not files or any(f["filename"] not in RELEASE_FILES
@@ -129,6 +147,7 @@ def main():
         result = api(f"{root}/pulls/{pr['number']}/merge", {"sha": sha, "merge_method": "merge"})
         if not result.get("merged"):
             raise RuntimeError(f"GitHub declined the merge: {result.get('message')}")
+        output("merged", "true")
         print(f"Merged release PR; the workflow will dispatch release-plz to publish {result['sha']}")
     else:
         print("Preview only; pass --merge to merge")

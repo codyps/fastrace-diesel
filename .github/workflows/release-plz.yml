@@ -75,8 +75,4 @@ jobs:
       - name: Dispatch CI for release PRs created with GITHUB_TOKEN
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName,author --jq '.[] | select(.author.login == "app/github-actions") | .headRefName | select(startswith("release-plz-"))' |
-          while IFS= read -r branch; do
-            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
-          done
+        run: python3 .github/scripts/dispatch_release_ci.py --dispatch

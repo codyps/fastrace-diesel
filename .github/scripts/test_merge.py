@@ -1,6 +1,8 @@
 import contextlib
 from datetime import datetime, timezone
 import io
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -40,14 +42,17 @@ class AutoReleaseTests(unittest.TestCase):
         self.runs.append({"id": 11, "status": "in_progress", "conclusion": None})
         self.assertFalse(release.ci_passed(self.runs, self.jobs))
 
-    def run_main(self, merge=True, changed=False, unsafe_file=False, held=False):
+    def run_main(self, merge=True, changed=False, unsafe_file=False, held=False,
+                 stale=False, candidates=None, merge_result=None):
         root = "repos/codyps/fastrace-diesel"
         reads = {
             root: {"default_branch": "main"}, "user": {"login": "github-actions[bot]"},
             f"{root}/pulls/2": self.pr,
+            f"{root}/git/commits/base-sha": {"tree": {"sha": "base-tree"}},
+            f"{root}/git/commits/checked-sha": {"tree": {"sha": "base-tree" if stale else "head-tree"}},
         }
         collections = {
-            f"{root}/pulls?state=open&base=main": [self.pr],
+            f"{root}/pulls?state=open&base=main": [self.pr] if candidates is None else candidates,
             f"{root}/pulls/2/files": [{"filename": "src/lib.rs" if unsafe_file else "Cargo.toml",
                                       "status": "modified"}],
             f"{root}/actions/workflows/ci.yml/runs?event=workflow_dispatch&head_sha=checked-sha": self.runs,
@@ -60,34 +65,54 @@ class AutoReleaseTests(unittest.TestCase):
             nonlocal pr_reads
             if payload is not None:
                 mutations.append((endpoint, payload))
-                return {"merged": True, "sha": "merge-sha"}
+                return {"merged": True, "sha": "merge-sha"} if merge_result is None else merge_result
             if endpoint.endswith("/pulls/2"):
                 pr_reads += 1
                 if changed and pr_reads == 2:
                     return {**self.pr, "head": {**self.pr["head"], "sha": "new-sha"}}
             return reads[endpoint]
 
-        with (patch.object(release, "api", side_effect=fake_api),
+        with (tempfile.TemporaryDirectory() as directory,
+              patch.object(release, "api", side_effect=fake_api),
               patch.object(release, "pages", side_effect=lambda endpoint, key=None:
                            collections.get(endpoint, [])),
               patch.object(release, "cooldown_reason", return_value="Hold-off" if held else None),
-              patch.dict("os.environ", {"GITHUB_REPOSITORY": "codyps/fastrace-diesel"}),
+              patch.dict("os.environ", {"GITHUB_REPOSITORY": "codyps/fastrace-diesel",
+                                        "GITHUB_OUTPUT": str(Path(directory) / "outputs")}),
               patch("sys.argv", ["auto_release.py"] + (["--merge"] if merge else [])),
               contextlib.redirect_stdout(io.StringIO())):
-            release.main()
+            try:
+                release.main()
+            finally:
+                self.outputs = dict(line.split("=", 1) for line in
+                                    (Path(directory) / "outputs").read_text().splitlines())
         return mutations
 
     def test_merge_pins_examined_sha_and_preserves_release_pr_history(self):
         self.assertEqual(self.run_main(), [
             ("repos/codyps/fastrace-diesel/pulls/2/merge", {"sha": "checked-sha", "merge_method": "merge"})])
+        self.assertEqual(self.outputs, {"merged": "true"})
 
     def test_preview_never_merges(self):
         self.assertEqual(self.run_main(merge=False), [])
+        self.assertEqual(self.outputs, {"merged": "false"})
+
+    def test_no_candidate_or_stale_tree_never_requests_publishing(self):
+        for options in [{"candidates": []}, {"candidates": [self.pr, self.pr]}, {"stale": True}]:
+            with self.subTest(options=options):
+                self.assertEqual(self.run_main(**options), [])
+                self.assertEqual(self.outputs, {"merged": "false"})
+
+    def test_failed_merge_never_requests_publishing(self):
+        with self.assertRaisesRegex(RuntimeError, "GitHub declined"):
+            self.run_main(merge_result={"merged": False, "message": "blocked"})
+        self.assertEqual(self.outputs, {"merged": "false"})
 
     def test_changed_head_unsafe_files_or_new_release_block_merge(self):
         for option in ["changed", "unsafe_file", "held"]:
             with self.subTest(option=option):
                 self.assertEqual(self.run_main(**{option: True}), [])
+                self.assertEqual(self.outputs, {"merged": "false"})
 
     def test_draft_wrong_author_and_blocked_mergeability(self):
         for changes in [{"draft": True}, {"user": {"login": "someone"}},
