@@ -34,6 +34,7 @@ jobs:
           persist-credentials: false
 
       - name: Check interval and merge eligible release PR
+        id: merge
         timeout-minutes: 3
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,11 +46,9 @@ jobs:
           fi
           python3 .github/scripts/auto_release.py "${args[@]}"
 
-      - name: Retry or dispatch publishing after an automatic merge
+      - name: Dispatch publishing after an automatic merge
+        if: steps.merge.outputs.merged == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
-          if [[ "$DRY_RUN" != "true" ]]; then
-            gh workflow run release-plz.yml --repo "$GITHUB_REPOSITORY" --ref main
-          fi
+          gh workflow run release-plz.yml --repo "$GITHUB_REPOSITORY" --ref main

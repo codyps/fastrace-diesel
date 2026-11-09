@@ -65,4 +65,6 @@ Release-plz creates release PRs; merging one publishes to crates.io and creates 
 
 Automation uses the repository GITHUB_TOKEN and explicitly dispatches CI and publishing workflows. No personal GitHub token is needed. The automatic release workflow defaults to a read-only preview when run manually.
 
+Automatic publishing is dispatched only after a confirmed merge. No-op checks, stale release PRs whose file tree matches the base, and blocked merges do not start publishing. CI is dispatched once per release PR head SHA; an existing queued, running, successful, or failed dispatch is left alone. Retry a failed CI run in GitHub Actions, and retry failed publication by manually running Release-plz on `main` after addressing the failure.
+
 After the first manual publication of `fastrace-diesel`, configure its crates.io trusted publisher for the repository and workflow below. Subsequent publishing uses crates.io trusted publishing (GitHub Actions OIDC), bound to `codyps/fastrace-diesel` and `.github/workflows/release-plz.yml`, with no GitHub environment. The publishing job has `id-token: write`; release-plz exchanges the job identity for a short-lived crates.io token. No `CARGO_REGISTRY_TOKEN` secret or environment variable is used.
