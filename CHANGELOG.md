@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/codyps/fastrace-diesel/compare/fastrace-diesel-0.1.2...fastrace-diesel-0.1.3) - 2026-11-09
+
+### Fixed
+
+- stop no-op release dispatch loops
+
 ### Changed
 
 - Rename the crate to `fastrace-diesel` and the Rust import to `fastrace_diesel`.
